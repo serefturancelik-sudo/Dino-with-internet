@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Dinozor: Uzay Kaçışı (Mobil)</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1e1e28;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background-color: #f7f7f7;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // Ekran boyutlarını ayarla (Tam ekran)
+        let SCREEN_WIDTH = window.innerWidth;
+        let SCREEN_HEIGHT = window.innerHeight;
+        canvas.width = SCREEN_WIDTH;
+        canvas.height = SCREEN_HEIGHT;
+
+        window.addEventListener("resize", () => {
+            SCREEN_WIDTH = window.innerWidth;
+            SCREEN_HEIGHT = window.innerHeight;
+            canvas.width = SCREEN_WIDTH;
+            canvas.height = SCREEN_HEIGHT;
+            initPositions();
+        });
+
+        // --- RENKLER ---
+        const COLOR_BG = "#f7f7f7";
+        const COLOR_DARK_BG = "#1e1e28";
+        const COLOR_TEXT = "#535353";
+        const COLOR_WHITE = "#ffffff";
+        const COLOR_GREEN = "#2ecc71";
+        const COLOR_RED = "#e74c3c";
+        const COLOR_BLUE = "#3498db";
+        const COLOR_YELLOW = "#f1c40f";
+        const COLOR_ORANGE = "#e67e22";
+        const COLOR_GRAY = "#c8c8c8";
+        const COLOR_DARK_GRAY = "#646464";
+
+        // --- OYUN DURUMLARI ---
+        const STATE_MENU = 0;
+        const STATE_CLASSIC = 1;
+        const STATE_WIFI_BOMB = 2;
+        const STATE_PUZZLE = 3;
+        const STATE_WIN = 4;
+        const STATE_GAME_OVER = 5;
+
+        // --- GLOBAL DEĞİŞKENLER & DURUM ---
+        let gameState = STATE_MENU;
+        const timeLimit = 600 * 1000; // 10 Dakika
+        let startTime = Date.now();
+        let timeRemaining = timeLimit;
+        let pauseStartTime = 0;
+        let isPaused = false;
+
+        let classicPassedCount = 0;
+        const neededClassicJumps = 10;
+        let bombsDodged = 0;
+        const neededBombDodges = 15;
+
+        let dinoX, dinoY, dinoVelY, isJumping, dinoFrame, dinoFrameTimer;
+        const gravity = 0.8;
+        const jumpStrength = -15;
+        const dinoWidth = 44;
+        const dinoHeight = 44;
+        const dinoSpeed = 7;
+
+        let cacti = [];
+        let cactusSpawnTimer = 0;
+        const gameSpeed = 7;
+
+        let bombs = [];
+        let bombSpawnTimer = 0;
+        let pulseCounter = 0;
+
+        let spaceshipX, spaceshipY, spaceshipHover, spaceshipReady;
+        let puzzleNodes = [];
+        let selectedNode = null;
+        let connections = [];
+        let mouseX = 0, mouseY = 0;
+
+        // Duraklatma butonu ve Devam et butonu alanları
+        let pauseIconRect = { x: 0, y: 20, width: 30, height: 30 };
+        let resumeBtnRect = { x: 0, y: 0, width: 200, height: 60 };
+
+        function initPositions() {
+            pauseIconRect.x = SCREEN_WIDTH - 60;
+            resumeBtnRect.x = (SCREEN_WIDTH - resumeBtnRect.width) / 2;
+            resumeBtnRect.y = (SCREEN_HEIGHT - resumeBtnRect.height) / 2;
+        }
+
+        function resetGameStates() {
+            startTime = Date.now();
+            timeRemaining = timeLimit;
+            classicPassedCount = 0;
+            bombsDodged = 0;
+            isPaused = false;
+
+            dinoX = 100;
+            dinoY = 350;
+            dinoVelY = 0;
+            isJumping = false;
+            dinoFrame = 0;
+            dinoFrameTimer = 0;
+
+            cacti = [];
+            cactusSpawnTimer = 0;
+            bombs = [];
+            bombSpawnTimer = 0;
+            pulseCounter = 0;
+
+            spaceshipX = SCREEN_WIDTH + 100;
+            spaceshipY = 300;
+            spaceshipHover = 0;
+            spaceshipReady = false;
+
+            puzzleNodes = [
+                { id: 1, x: (SCREEN_WIDTH / 4) - 20, y: 150, width: 40, height: 40, color: COLOR_RED, isActive: false },
+                { id: 2, x: (SCREEN_WIDTH / 4) - 20, y: 300, width: 40, height: 40, color: COLOR_BLUE, isActive: false },
+                { id: 3, x: (SCREEN_WIDTH / 4) - 20, y: 450, width: 40, height: 40, color: COLOR_YELLOW, isActive: false },
+                { id: 4, x: (3 * SCREEN_WIDTH / 4) - 20, y: 150, width: 40, height: 40, color: COLOR_RED, isActive: false },
+                { id: 5, x: (3 * SCREEN_WIDTH / 4) - 20, y: 300, width: 40, height: 40, color: COLOR_BLUE, isActive: false },
+                { id: 6, x: (3 * SCREEN_WIDTH / 4) - 20, y: 450, width: 40, height: 40, color: COLOR_YELLOW, isActive: false }
+            ];
+            selectedNode = null;
+            connections = [];
+        }
+
+        // --- ÇİZİM MODÜLLERİ ---
+        function drawDino(ctx, x, y, frame = 0, jumping = false) {
+            ctx.fillStyle = COLOR_TEXT;
+            ctx.fillRect(x + 20, y, 24, 16); 
+            
+            // Göz rengi arkaplana göre değişir
+            ctx.fillStyle = (gameState === STATE_PUZZLE || gameState === STATE_WIN) ? COLOR_DARK_BG : COLOR_BG;
+            ctx.fillRect(x + 24, y + 4, 4, 4); 
+
+            ctx.fillStyle = COLOR_TEXT;
+            ctx.fillRect(x + 16, y + 12, 16, 12); 
+            ctx.fillRect(x + 4, y + 20, 32, 16); 
+            ctx.fillRect(x, y + 24, 8, 8); 
+            ctx.fillRect(x + 32, y + 22, 6, 4); 
+            
+            if (jumping) {
+                ctx.fillRect(x + 10, y + 36, 6, 6);
+                ctx.fillRect(x + 24, y + 36, 6, 6);
+            } else {
+                if (frame === 0) {
+                    ctx.fillRect(x + 10, y + 36, 6, 8);
+                    ctx.fillRect(x + 24, y + 36, 6, 4);
+                } else {
+                    ctx.fillRect(x + 10, y + 36, 6, 4);
+                    ctx.fillRect(x + 24, y + 36, 6, 8);
+                }
+            }
+        }
+
+        function drawCactus(ctx, x, y) {
+            ctx.fillStyle = COLOR_TEXT;
+            ctx.fillRect(x + 10, y, 8, 40); 
+            ctx.fillRect(x, y + 12, 10, 6); 
+            ctx.fillRect(x, y + 6, 6, 10);
+            ctx.fillRect(x + 18, y + 18, 10, 6); 
+            ctx.fillRect(x + 22, y + 10, 6, 12);
+        }
+
+        function drawWifiBomb(ctx, x, y, pulse) {
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 15, 12, 0, Math.PI * 2);
+            ctx.fillStyle = COLOR_RED;
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(x + 15, y + 3);
+            ctx.lineTo(x + 15, y - 5);
+            ctx.strokeStyle = COLOR_ORANGE;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            if (pulse % 20 < 10) {
+                ctx.beginPath();
+                ctx.arc(x + 15, y - 7, 4, 0, Math.PI * 2);
+                ctx.fillStyle = COLOR_YELLOW;
+                ctx.fill();
+            }
+
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 15, 2, 0, Math.PI * 2);
+            ctx.fillStyle = COLOR_WHITE;
+            ctx.fill();
+
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = COLOR_WHITE;
+            
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 15, 7, Math.PI * 1.25, Math.PI * 1.75);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 15, 12, Math.PI * 1.25, Math.PI * 1.75);
+            ctx.stroke();
+        }
+
+        function drawSpaceship(ctx, x, y, hover) {
+            let hoverOffset = Math.sin(hover * 0.1) * 5;
+            let ny = y + hoverOffset;
+
+            // Kubbe
+            ctx.beginPath();
+            ctx.ellipse(x + 30, ny + 10, 15, 10, 0, 0, Math.PI * 2);
+            ctx.fillStyle = COLOR_BLUE;
+            ctx.fill();
+
+            // Gövde
+            ctx.beginPath();
+            ctx.ellipse(x + 30, ny + 20, 30, 10, 0, 0, Math.PI * 2);
+            ctx.fillStyle = COLOR_GREEN;
+            ctx.fill();
+
+            // Işıklar
+            ctx.fillStyle = COLOR_YELLOW;
+            ctx.beginPath(); ctx.arc(x + 10, ny + 20, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(x + 30, ny + 22, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(x + 50, ny + 20, 3, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // --- HUD YARDIMCILARI ---
+        function drawHud() {
+            let seconds = Math.floor((timeRemaining / 1000) % 60);
+            let minutes = Math.floor((timeRemaining / (1000 * 60)) % 60);
+            let timeStr = `SÜRE: ${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+            let timerColor = (gameState === STATE_PUZZLE) ? COLOR_WHITE : COLOR_TEXT;
+            if (minutes < 1 && Math.floor(Date.now() / 500) % 2 === 0) {
+                timerColor = COLOR_RED;
+            }
+
+            ctx.font = "bold 22px 'Courier New'";
+            ctx.fillStyle = timerColor;
+            ctx.textAlign = "left";
+            ctx.fillText(timeStr, 20, 40);
+
+            let statusTextStr = "";
+            if (gameState === STATE_CLASSIC) {
+                statusTextStr = `Kaktüs Geç: ${classicPassedCount}/${neededClassicJumps}`;
+            } else if (gameState === STATE_WIFI_BOMB) {
+                statusTextStr = `Bombadan Kaç: ${bombsDodged}/${neededBombDodges}`;
+                if (spaceshipReady && spaceshipX <= (SCREEN_WIDTH / 2) - 30) {
+                    statusTextStr = "Geminin altına gel ve GEMİYE DOKUN!";
+                }
+            } else if (gameState === STATE_PUZZLE) {
+                statusTextStr = "Aynı Renkli Güç Panellerini Birleştir!";
+            }
+
+            ctx.font = "bold 16px 'Courier New'";
+            ctx.fillText(statusTextStr, 20, 75);
+        }
+
+        function drawPauseButton() {
+            if (!isPaused) {
+                ctx.fillStyle = (gameState === STATE_PUZZLE) ? COLOR_WHITE : COLOR_TEXT;
+                ctx.fillRect(pauseIconRect.x, pauseIconRect.y, 8, 30);
+                ctx.fillRect(pauseIconRect.x + 16, pauseIconRect.y, 8, 30);
+            } else {
+                ctx.fillStyle = COLOR_DARK_GRAY;
+                ctx.fillRect(resumeBtnRect.x, resumeBtnRect.y, resumeBtnRect.width, resumeBtnRect.height);
+                
+                ctx.font = "bold 22px 'Courier New'";
+                ctx.fillStyle = COLOR_WHITE;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("DEVAM ET", resumeBtnRect.x + resumeBtnRect.width / 2, resumeBtnRect.y + resumeBtnRect.height / 2);
+            }
+        }
+
+        // --- DÖNGÜ VE GÜNCELLEMELER ---
+        function updateTimer() {
+            if ([STATE_CLASSIC, STATE_WIFI_BOMB, STATE_PUZZLE].includes(gameState) && !isPaused) {
+                let passedTime = Date.now() - startTime;
+                timeRemaining = Math.max(0, timeLimit - passedTime);
+                if (timeRemaining <= 0) {
+                    gameState = STATE_GAME_OVER;
+                }
+            }
+        }
+
+        function update() {
+            if (isPaused) return;
+
+            updateTimer();
+            dinoFrameTimer++;
+            if (dinoFrameTimer >= 6) {
+                dinoFrame = 1 - dinoFrame;
+                dinoFrameTimer = 0;
+            }
+
+            if (gameState === STATE_CLASSIC) {
+                dinoVelY += gravity;
+                dinoY += dinoVelY;
+                if (dinoY >= 350) {
+                    dinoY = 350;
+                    dinoVelY = 0;
+                    isJumping = false;
+                }
+
+                cactusSpawnTimer++;
+                if (cactusSpawnTimer > Math.random() * (120 - 70) + 70) {
+                    cacti.push({ x: SCREEN_WIDTH + 50, y: 350, width: 30, height: 40 });
+                    cactusSpawnTimer = 0;
+                }
+
+                for (let i = cacti.length - 1; i >= 0; i--) {
+                    cacti[i].x -= gameSpeed;
+                    if (cacti[i].x < -50) {
+                        cacti.splice(i, 1);
+                        classicPassedCount++;
+                    } else {
+                        // Çarpışma Testi
+                        if (dinoX + 5 < cacti[i].x + cacti[i].width &&
+                            dinoX + dinoWidth - 10 > cacti[i].x &&
+                            dinoY < cacti[i].y + cacti[i].height &&
+                            dinoY + dinoHeight > cacti[i].y) {
+                            gameState = STATE_GAME_OVER;
+                        }
+                    }
+                }
+
+                if (classicPassedCount >= neededClassicJumps) {
+                    dinoX = SCREEN_WIDTH / 2;
+                    dinoY = 450;
+                    gameState = STATE_WIFI_BOMB;
+                }
+
+            } else if (gameState === STATE_WIFI_BOMB) {
+                pulseCounter++;
+
+                // Dokunmatik/Fare ile Sağa Sola Yürüme (Ekranın sol/sağ yarısı)
+                if (isPointerDown && !isPaused) {
+                    // Butona dokunulmadıysa yürü
+                    let shipRect = { x: spaceshipX - 10, y: spaceshipY - 10, width: 80, height: 50 };
+                    if (!(spaceshipReady && mouseX >= shipRect.x && mouseX <= shipRect.x + shipRect.width && mouseY >= shipRect.y && mouseY <= shipRect.y + shipRect.height)) {
+                        if (mouseX < SCREEN_WIDTH / 2) {
+                            dinoX -= dinoSpeed;
+                        } else {
+                            dinoX += dinoSpeed;
+                        }
+                    }
+                }
+
+                dinoX = Math.max(10, Math.min(dinoX, SCREEN_WIDTH - dinoWidth - 10));
+
+                bombSpawnTimer++;
+                if (bombSpawnTimer > 25) {
+                    let bx = Math.random() * (SCREEN_WIDTH - 70) + 20;
+                    bombs.push({ x: bx, y: -40, width: 30, height: 30 });
+                    bombSpawnTimer = 0;
+                }
+
+                for (let i = bombs.length - 1; i >= 0; i--) {
+                    bombs[i].y += 5;
+                    if (bombs[i].y > SCREEN_HEIGHT) {
+                        bombs.splice(i, 1);
+                        bombsDodged++;
+                    } else {
+                        if (dinoX < bombs[i].x + bombs[i].width &&
+                            dinoX + dinoWidth > bombs[i].x &&
+                            dinoY < bombs[i].y + bombs[i].height &&
+                            dinoY + dinoHeight > bombs[i].y) {
+                            gameState = STATE_GAME_OVER;
+                        }
+                    }
+                }
+
+                if (bombsDodged >= neededBombDodges) {
+                    spaceshipReady = true;
+                }
+
+                if (spaceshipReady) {
+                    if (spaceshipX > (SCREEN_WIDTH / 2) - 30) {
+                        spaceshipX -= 3;
+                    }
+                }
+            } else if (gameState === STATE_PUZZLE) {
+                if (connections.length === 3) {
+                    gameState = STATE_WIN;
+                }
+            }
+        }
+
+        function draw() {
+            ctx.textBaseline = "alphabetic"; 
+            if (gameState === STATE_MENU) {
+                ctx.fillStyle = COLOR_BG;
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+                
+                ctx.fillStyle = COLOR_TEXT;
+                ctx.textAlign = "center";
+                ctx.font = "bold 36px 'Courier New'";
+                ctx.fillText("DİNO: UZAY KAÇIŞI", SCREEN_WIDTH / 2, 80);
+                
+                ctx.fillStyle = COLOR_RED;
+                ctx.font = "bold 22px 'Courier New'";
+                ctx.fillText("10 DAKİKA SONRA BOMBA PATLAYACAK!", SCREEN_WIDTH / 2, 150);
+                
+                drawDino(ctx, (SCREEN_WIDTH / 2) - 22, 240);
+                
+                ctx.fillStyle = COLOR_TEXT;
+                ctx.font = "bold 16px 'Courier New'";
+                ctx.fillText("Kaktüsleri geç, WiFi bombalarından kaç ve gemiyi çalıştır!", SCREEN_WIDTH / 2, 330);
+                
+                ctx.fillStyle = COLOR_BLUE;
+                ctx.font = "bold 22px 'Courier New'";
+                ctx.fillText("[ BAŞLAMAK İÇİN EKRANA DOKUNUN ]", SCREEN_WIDTH / 2, 450);
+
+            } else if (gameState === STATE_CLASSIC) {
+                ctx.fillStyle = COLOR_BG;
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+                
+                ctx.strokeStyle = COLOR_TEXT;
+                ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(0, 390); ctx.lineTo(SCREEN_WIDTH, 390); ctx.stroke();
+
+                drawDino(ctx, dinoX, dinoY, dinoFrame, isJumping);
+                cacti.forEach(c => drawCactus(ctx, c.x, c.y));
+                
+                drawHud();
+                drawPauseButton();
+
+            } else if (gameState === STATE_WIFI_BOMB) {
+                ctx.fillStyle = COLOR_BG;
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+                
+                ctx.strokeStyle = COLOR_TEXT;
+                ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(0, 490); ctx.lineTo(SCREEN_WIDTH, 490); ctx.stroke();
+
+                drawDino(ctx, dinoX, dinoY, dinoFrame, false);
+                bombs.forEach(b => drawWifiBomb(ctx, b.x, b.y, pulseCounter));
+
+                if (spaceshipReady) {
+                    spaceshipHover++;
+                    drawSpaceship(ctx, spaceshipX, spaceshipY, spaceshipHover);
+                    if (Math.floor(Date.now() / 300) % 2 === 0) {
+                        ctx.fillStyle = COLOR_GREEN;
+                        ctx.font = "bold 16px 'Courier New'";
+                        ctx.textAlign = "center";
+                        ctx.fillText("GEMİYE DOKUN VE BİN!", spaceshipX + 30, spaceshipY - 15);
+                    }
+                }
+
+                ctx.strokeStyle = "#dc9c9c";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath(); ctx.moveTo(SCREEN_WIDTH / 2, 0); ctx.lineTo(SCREEN_WIDTH / 2, SCREEN_HEIGHT); ctx.stroke();
+                ctx.setLineDash([]); // Reset line dash
+
+                drawHud();
+                drawPauseButton();
+
+            } else if (gameState === STATE_PUZZLE) {
+                ctx.fillStyle = COLOR_DARK_BG;
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+                ctx.fillStyle = COLOR_WHITE;
+                ctx.textAlign = "center";
+                ctx.font = "bold 36px 'Courier New'";
+                ctx.fillText("KONTROL PANELİ", SCREEN_WIDTH / 2, 60);
+
+                ctx.fillStyle = COLOR_YELLOW;
+                ctx.font = "bold 16px 'Courier New'";
+                ctx.fillText("Panellere sırayla dokunarak aynı renkleri birbirine bağla!", SCREEN_WIDTH / 2, 100);
+
+                // Mevcut bağlantıları çiz
+                connections.forEach(conn => {
+                    ctx.strokeStyle = conn.c;
+                    ctx.lineWidth = 8;
+                    ctx.beginPath();
+                    ctx.moveTo(conn.x1, conn.y1);
+                    ctx.lineTo(conn.x2, conn.y2);
+                    ctx.stroke();
+                });
+
+                // Aktif çekilen çizgiyi göster
+                if (selectedNode) {
+                    ctx.strokeStyle = selectedNode.color;
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(selectedNode.x + 20, selectedNode.y + 20);
+                    ctx.lineTo(mouseX, mouseY);
+                    ctx.stroke();
+                }
+
+                // Düğümleri çiz
+                puzzleNodes.forEach(node => {
+                    ctx.lineWidth = 4;
+                    ctx.strokeStyle = node.isActive ? COLOR_WHITE : "#646464";
+                    ctx.strokeRect(node.x, node.y, node.width, node.height);
+                    
+                    ctx.fillStyle = node.color;
+                    ctx.fillRect(node.x + 6, node.y + 6, node.width - 12, node.height - 12);
+
+                    if (selectedNode === node) {
+                        ctx.strokeStyle = COLOR_WHITE;
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(node.x - 4, node.y - 4, node.width + 8, node.height + 8);
+                    }
+                });
+
+                // Ortadaki Gösterge Paneli
+                ctx.fillStyle = "#323246";
+                ctx.fillRect((SCREEN_WIDTH / 2) - 80, 200, 160, 180);
+
+                let statusColor = connections.length < 3 ? COLOR_RED : COLOR_GREEN;
+                let statusText = connections.length < 3 ? "SİSTEM: GÜÇSÜZ" : "SİSTEM: HAZIR";
+                
+                ctx.fillStyle = statusColor;
+                ctx.font = "bold 18px 'Courier New'";
+                ctx.fillText(statusText, SCREEN_WIDTH / 2, 295);
+
+                drawHud();
+                drawPauseButton();
+
+            } else if (gameState === STATE_WIN) {
+                ctx.fillStyle = COLOR_DARK_BG;
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+                ctx.fillStyle = COLOR_GREEN;
+                ctx.textAlign = "center";
+                ctx.font = "bold 36px 'Courier New'";
+                ctx.fillText("TEBRİKLER, KAÇTINIZ!", SCREEN_WIDTH / 2, 100);
+
+                ctx.fillStyle = COLOR_WHITE;
+                ctx.font = "bold 22px 'Courier New'";
+                ctx.fillText("Bomba patlamadan uzay gemisini çalıştırıp kaçtınız!", SCREEN_WIDTH / 2, 350);
+
+                ctx.fillStyle = COLOR_BLUE;
+                ctx.font = "bold 16px 'Courier New'";
+                ctx.fillText("[ YENİDEN OYNAMAK İÇİN EKRANA DOKUNUN ]", SCREEN_WIDTH / 2, 450);
+
+                spaceshipHover++;
+                drawSpaceship(ctx, (SCREEN_WIDTH / 2) - 30, 220, spaceshipHover);
+
+            } else if (gameState === STATE_GAME_OVER) {
+                ctx.fillStyle = COLOR_BG;
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+                ctx.fillStyle = COLOR_RED;
+                ctx.textAlign = "center";
+                ctx.font = "bold 36px 'Courier New'";
+                ctx.fillText("OYUN BİTTİ", SCREEN_WIDTH / 2, 150);
+
+                ctx.fillStyle = COLOR_TEXT;
+                ctx.font = "bold 22px 'Courier New'";
+                let reason = (timeRemaining <= 0) ? "BOMBA PATLADI! Zamanınız tükendi." : "Dinozor engellere çarparak yok oldu!";
+                ctx.fillText(reason, SCREEN_WIDTH / 2, 250);
+
+                ctx.fillStyle = COLOR_BLUE;
+                ctx.font = "bold 16px 'Courier New'";
+                ctx.fillText("[ BAŞTAN BAŞLAMAK İÇİN EKRANA DOKUNUN ]", SCREEN_WIDTH / 2, 400);
+            }
+        }
+
+        // --- ETKİLEŞİM & OLAY YÖNETİMİ ---
+        let isPointerDown = false;
+
+        function handlePointerDown(x, y) {
+            mouseX = x;
+            mouseY = y;
+            isPointerDown = true;
+
+            // Duraklatma Mantığı Kontrolleri
+            if ([STATE_CLASSIC, STATE_WIFI_BOMB, STATE_PUZZLE].includes(gameState)) {
+                if (!isPaused && x >= pauseIconRect.x && x <= pauseIconRect.x + pauseIconRect.width && y >= pauseIconRect.y && y <= pauseIconRect.y + pauseIconRect.height) {
+                    isPaused = true;
+                    pauseStartTime = Date.now();
+                    return;
+                } else if (isPaused && x >= resumeBtnRect.x && x <= resumeBtnRect.x + resumeBtnRect.width && y >= resumeBtnRect.y && y <= resumeBtnRect.y + resumeBtnRect.height) {
+                    isPaused = false;
+                    startTime += (Date.now() - pauseStartTime);
+                    return;
+                }
+            }
+
+            if (isPaused) return;
+
+            if (gameState === STATE_MENU) {
+                resetGameStates();
+                gameState = STATE_CLASSIC;
+            } else if (gameState === STATE_WIN || gameState === STATE_GAME_OVER) {
+                gameState = STATE_MENU;
+            } else if (gameState === STATE_CLASSIC) {
+                if (!isJumping) {
+                    dinoVelY = jumpStrength;
+                    isJumping = true;
+                }
+            } else if (gameState === STATE_WIFI_BOMB) {
+                if (spaceshipReady && spaceshipX <= (SCREEN_WIDTH / 2) - 30) {
+                    let shipRect = { x: spaceshipX - 10, y: spaceshipY - 10, width: 80, height: 50 };
+                    if (x >= shipRect.x && x <= shipRect.x + shipRect.width && y >= shipRect.y && y <= shipRect.y + shipRect.height) {
+                        if (Math.abs((dinoX + dinoWidth / 2) - (spaceshipX + 30)) < 100) {
+                            gameState = STATE_PUZZLE;
+                        }
+                    }
+                }
+            } else if (gameState === STATE_PUZZLE) {
+                puzzleNodes.forEach(node => {
+                    if (x >= node.x && x <= node.x + node.width && y >= node.y && y <= node.y + node.height) {
+                        if (!selectedNode) {
+                            selectedNode = node;
+                        } else {
+                            if (node.id !== selectedNode.id && node.color === selectedNode.color) {
+                                let alreadyConnected = connections.some(c => c.id1 === node.id || c.id2 === node.id || c.id1 === selectedNode.id || c.id2 === selectedNode.id);
+                                if (!alreadyConnected) {
+                                    connections.push({
+                                        id1: selectedNode.id,
+                                        id2: node.id,
+                                        x1: selectedNode.x + 20,
+                                        y1: selectedNode.y + 20,
+                                        x2: node.x + 20,
+                                        y2: node.y + 20,
+                                        c: node.color
+                                    });
+                                    node.isActive = true;
+                                    selectedNode.isActive = true;
+                                }
+                            }
+                            selectedNode = null;
+                        }
+                    }
+                });
+            }
+        }
+
+        function handlePointerMove(x, y) {
+            mouseX = x;
+            mouseY = y;
+        }
+
+        function handlePointerUp() {
+            isPointerDown = false;
+        }
+
+        // Fare Dinleyicileri
+        canvas.addEventListener("mousedown", (e) => handlePointerDown(e.clientX, e.clientY));
+        canvas.addEventListener("mousemove", (e) => handlePointerMove(e.clientX, e.clientY));
+        canvas.addEventListener("mouseup", handlePointerUp);
+
+        // Dokunmatik Ekran Dinleyicileri (Mobil Uyum)
+        canvas.addEventListener("touchstart", (e) => {
+            let touch = e.touches[0];
+            handlePointerDown(touch.clientX, touch.clientY);
+        });
+        canvas.addEventListener("touchmove", (e) => {
+            let touch = e.touches[0];
+            handlePointerMove(touch.clientX, touch.clientY);
+        });
+        canvas.addEventListener("touchend", handlePointerUp);
+
+        // --- ANA OYUN DÖNGÜSÜ ---
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Başlangıç Kurulumu
+        initPositions();
+        resetGameStates();
+        gameLoop();
+    </script>
+</body>
+</html>
